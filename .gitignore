@@ -1,0 +1,33 @@
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+
+# Python environments and generated files
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# JavaScript dependencies and build output
+node_modules/
+dist/
+build/
+.next/
+coverage/
+
+# Local databases, uploads, and logs
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+uploads/
+*.log
+
+# Private keys and local secrets
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
