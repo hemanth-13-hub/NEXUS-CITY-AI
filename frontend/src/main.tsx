@@ -4,5 +4,9 @@ import { BrowserRouter } from 'react-router-dom';
 import App from './App';
 import './styles.css';
 import 'leaflet/dist/leaflet.css';
+import './pwa.css';
+import { registerSW } from 'virtual:pwa-register';
+
+registerSW({ immediate: true });
 
 createRoot(document.getElementById('root')!).render(<React.StrictMode><BrowserRouter><App /></BrowserRouter></React.StrictMode>);

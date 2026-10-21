@@ -9,6 +9,10 @@ class Report(Base):
     __tablename__ = "reports"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     public_report_id: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    idempotency_payload_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
     title: Mapped[str] = mapped_column(String(140))
     description: Mapped[str] = mapped_column(Text)
     citizen_category: Mapped[str] = mapped_column(String(50), index=True)

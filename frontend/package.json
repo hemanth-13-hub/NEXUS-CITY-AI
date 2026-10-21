@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
@@ -10,19 +13,20 @@
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
-    "vite": "latest",
-    "typescript": "latest",
+    "leaflet": "latest",
+    "lucide-react": "latest",
     "react": "latest",
     "react-dom": "latest",
+    "react-leaflet": "latest",
     "react-router-dom": "latest",
-    "lucide-react": "latest",
     "recharts": "latest",
-    "leaflet": "latest",
-    "react-leaflet": "latest"
+    "typescript": "latest",
+    "vite": "latest"
   },
   "devDependencies": {
     "@types/leaflet": "latest",
     "@types/react": "latest",
-    "@types/react-dom": "latest"
+    "@types/react-dom": "latest",
+    "vite-plugin-pwa": "^2.0.0"
   }
 }

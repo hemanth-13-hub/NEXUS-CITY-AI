@@ -1,16 +1,27 @@
 from datetime import datetime, timezone
-from uuid import uuid4
-from pathlib import Path
-from ..config import UPLOAD_DIR
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
+import hashlib
+import json
+from uuid import UUID, uuid4
+from ..config import APP_ENV, UPLOAD_DIR
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, UploadFile, File
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from ..database import get_db
 from ..models import Report, ReportHistory
 from ..schemas import ReportCreate, ReportOut, ReportUpdate, HistoryOut, CATEGORIES
 from ..services.ai_service import analyze
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
+
+
+def require_development_admin():
+    if APP_ENV == "production":
+        raise HTTPException(
+            status_code=404,
+            detail="Operations endpoints are disabled until authentication is configured",
+        )
+
 
 def get_report(db: Session, report_id: str):
     q = select(Report).options(selectinload(Report.history)).where(Report.public_report_id == report_id)
@@ -22,14 +33,59 @@ def get_report(db: Session, report_id: str):
     return report
 
 @router.post("", response_model=ReportOut, status_code=201)
-def create_report(payload: ReportCreate, db: Session = Depends(get_db)):
+def create_report(
+    payload: ReportCreate,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    db: Session = Depends(get_db),
+):
+    payload_json = json.dumps(
+        payload.model_dump(), sort_keys=True, separators=(",", ":")
+    )
+    payload_hash = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
+    if idempotency_key is not None:
+        try:
+            idempotency_key = str(UUID(idempotency_key))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400, detail="Idempotency-Key must be a valid UUID"
+            ) from exc
+        existing = db.scalar(
+            select(Report).where(Report.idempotency_key == idempotency_key)
+        )
+        if existing:
+            if existing.idempotency_payload_hash != payload_hash:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Idempotency-Key was already used for a different report",
+                )
+            return existing
     analysis = analyze(payload.title, payload.description, payload.citizen_category)
     report = Report(public_report_id=f"NX-{uuid4().hex[:8].upper()}", **payload.model_dump(),
                     ai_suggested_category=analysis["suggested_category"], severity=analysis["severity"],
                     ai_explanation=analysis["explanation"], ai_summary=analysis["summary"], department=analysis["department"])
-    db.add(report); db.flush()
-    db.add(ReportHistory(report_id=report.id, previous_status=None, new_status="Reported", changed_by="Citizen", change_note="Report submitted"))
-    db.commit(); db.refresh(report)
+    report.idempotency_key = idempotency_key
+    report.idempotency_payload_hash = payload_hash if idempotency_key else None
+    db.add(report)
+    try:
+        db.flush()
+        db.add(ReportHistory(report_id=report.id, previous_status=None, new_status="Reported", changed_by="Citizen", change_note="Report submitted"))
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        if idempotency_key is None:
+            raise
+        existing = db.scalar(
+            select(Report).where(Report.idempotency_key == idempotency_key)
+        )
+        if not existing:
+            raise
+        if existing.idempotency_payload_hash != payload_hash:
+            raise HTTPException(
+                status_code=409,
+                detail="Idempotency-Key was already used for a different report",
+            )
+        return existing
+    db.refresh(report)
     return report
 
 @router.get("", response_model=list[ReportOut])
@@ -54,7 +110,7 @@ def report_history(report_id: str, db: Session = Depends(get_db)):
 
 @router.patch("/{report_id}", response_model=ReportOut)
 def update_report(report_id: str, payload: ReportUpdate, db: Session = Depends(get_db)):
-    # Development-only admin endpoint: protect it with real auth before deployment.
+    require_development_admin()
     report = get_report(db, report_id); data = payload.model_dump(exclude_unset=True)
     note = data.pop("change_note", None); previous = report.status
     for key, value in data.items():
@@ -69,6 +125,7 @@ def update_report(report_id: str, payload: ReportUpdate, db: Session = Depends(g
 
 @router.post("/{report_id}/analyze", response_model=ReportOut)
 def reanalyze_report(report_id: str, db: Session = Depends(get_db)):
+    require_development_admin()
     report = get_report(db, report_id); a = analyze(report.title, report.description, report.citizen_category)
     report.ai_suggested_category = a["suggested_category"]; report.ai_summary = a["summary"]; report.ai_explanation = a["explanation"]
     report.severity = a["severity"]; report.department = a["department"]; db.commit(); db.refresh(report)
@@ -78,6 +135,7 @@ def reanalyze_report(report_id: str, db: Session = Depends(get_db)):
 @router.post("/{report_id}/image", response_model=ReportOut)
 async def upload_report_image(report_id: str, image: UploadFile = File(...), db: Session = Depends(get_db)):
     """Development upload endpoint; validates file signature and limits size to 5 MiB."""
+    require_development_admin()
     report = get_report(db, report_id)
     allowed = {"image/jpeg": (".jpg", (b"\xff\xd8\xff",)), "image/png": (".png", (b"\x89PNG\r\n\x1a\n",)), "image/webp": (".webp", (b"RIFF",)), "image/gif": (".gif", (b"GIF87a", b"GIF89a"))}
     if image.content_type not in allowed:
@@ -90,7 +148,7 @@ async def upload_report_image(report_id: str, image: UploadFile = File(...), db:
     if image.content_type == "image/webp": valid = data.startswith(b"RIFF") and data[8:12] == b"WEBP"
     if not valid:
         raise HTTPException(status_code=415, detail="Image content does not match its declared file type")
-    filename = f"{uuid4().hex}{ext}"
+    filename = f"{report.public_report_id}{ext.lower()}"
     (UPLOAD_DIR / filename).write_bytes(data)
     report.image_path = f"/uploads/{filename}"
     report.updated_at = datetime.now(timezone.utc)
